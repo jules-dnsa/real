@@ -180,6 +180,34 @@ function calcPayoff(balance, apr, monthly) {
   return { months, totalInterest, totalPaid: monthly * months, payoffDate };
 }
 
+// Positive-amount transactions that are NOT income — peer transfers, ATM
+// deposits, reversals, returned items, internal moves, etc.
+const NON_INCOME_PATTERNS = [
+  "zelle", "venmo", "cash app", "cashapp", "paypal",
+  "atm deposit", "atm cash deposit",
+  "return of posted", "returned item", "returned check",
+  "fee reversal", "fee waiver", "credit adjustment", "debit adjustment",
+  "transfer from", "online transfer from", "mobile transfer",
+  "refund", "overdraft reversal", "chargeback",
+];
+
+function isTransfer(desc) {
+  const d = desc.toLowerCase();
+  return NON_INCOME_PATTERNS.some(p => d.includes(p));
+}
+
+// True income: payroll, direct deposit from an employer, government benefits
+const INCOME_PATTERNS = [
+  "direct deposit", "payroll", "salary", "adp", "paychex", "gusto",
+  "intuit payroll", "square payroll", "tax refund", "irs treas",
+  "social security", "ssi ", "unemployment",
+];
+
+function isRealIncome(desc) {
+  const d = desc.toLowerCase();
+  return INCOME_PATTERNS.some(p => d.includes(p));
+}
+
 function guessCategory(desc) {
   const d = desc.toLowerCase();
   for (const [cat, keywords] of Object.entries(KEYWORD_MAP)) {
@@ -293,6 +321,14 @@ function csvToTransactions(text) {
     }
 
     if (amount === 0) continue;
+
+    // A positive amount isn't automatically income — Zelle, ATM deposits,
+    // refunds, returns, and transfers are credits that aren't payroll.
+    // Demote to "other" unless the description looks like real income.
+    if (isIncome && (isTransfer(description) || !isRealIncome(description))) {
+      // Only keep as income if it explicitly looks like payroll/deposit
+      if (!isRealIncome(description)) isIncome = false;
+    }
 
     txs.push({
       id: `csv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,

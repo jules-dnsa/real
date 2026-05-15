@@ -25,19 +25,30 @@ export default async function handler(req, res) {
 
 Valid categories: truck, housing, utilities, groceries, gas, subscriptions, dining, insurance, medical, income, other
 
-Rules (apply strictly):
-- Restaurants, fast food, coffee shops, cafes, food delivery apps = "dining"
-- Actual gasoline/fuel charges at gas stations (the pump charge itself) = "gas"
-- Gas station convenience store or food purchases = "dining"
-- 7-Eleven, Circle K, Wawa, Sheetz, Kwik Trip food/snack purchases = "dining"
-- Grocery stores (Walmart Grocery, Kroger, Safeway, HEB, etc.) = "groceries"
+INCOME rules — be very strict, most credits are NOT income:
+- "income" ONLY for: payroll direct deposits, salary, ADP/Paychex/Gusto payroll, IRS tax refunds, Social Security, unemployment benefits
+- Zelle payments received = "other" (peer transfer, not income)
+- Venmo, Cash App, PayPal transfers in = "other"
+- ATM deposits, cash deposits = "other"
+- "Return of posted check", returned items, returned checks = "other"
+- Fee reversals, overdraft reversals, credit adjustments = "other"
+- "Transfer from" savings/checking = "other"
+- Refunds from merchants = category of that merchant (e.g. Amazon refund = "other", restaurant refund = "dining")
+- When in doubt about a credit, use "other" — not "income"
+
+EXPENSE rules:
+- Restaurants, fast food, coffee shops, food delivery (DoorDash, Uber Eats, Grubhub) = "dining"
+- Gas pump charges at gas stations = "gas"
+- Gas station convenience store / food purchases (snacks, drinks) = "dining"
+- 7-Eleven, Circle K, Wawa, Sheetz, Kwik Trip, Pilot, Flying J food = "dining"
+- Grocery stores (Walmart Grocery, Kroger, Safeway, HEB, Publix, etc.) = "groceries"
 - Target, Walmart general merchandise = "other"
-- Auto loan payments (Toyota Financial, Ford Motor Credit, Ally Auto, etc.) = "truck"
-- Netflix, Spotify, Hulu, gym memberships = "subscriptions"
+- Auto loan payments (Toyota Financial, Ford Motor Credit, Ally Auto, GM Financial) = "truck"
+- Netflix, Spotify, Hulu, Disney+, gym memberships = "subscriptions"
 - Electric, water, gas utility, internet, phone bills = "utilities"
-- Rent, mortgage payments = "housing"
-- Payroll, direct deposit, transfer in = "income"
-- When a description is ambiguous, pick the most likely based on the merchant name
+- Rent or mortgage payments = "housing"
+- Health/car/renters insurance = "insurance"
+- Doctor, hospital, pharmacy, dental = "medical"
 
 Descriptions to categorize:
 ${unique.map((d, i) => `${i + 1}. ${d}`).join("\n")}
