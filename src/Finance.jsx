@@ -1,4 +1,4 @@
-import { useState, useEffect, useReducer, useRef } from "react";
+import { useState, useEffect, useReducer, useRef, useCallback } from "react";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -414,6 +414,8 @@ function reducer(state, action) {
     case "ADD_TX": return { ...state, transactions: [action.tx, ...state.transactions] };
     case "ADD_BULK_TX": return { ...state, transactions: [...action.txs, ...state.transactions] };
     case "DELETE_TX": return { ...state, transactions: state.transactions.filter(t => t.id !== action.id) };
+    case "DELETE_BULK": return { ...state, transactions: state.transactions.filter(t => !action.ids.has(t.id)) };
+    case "RECATEGORIZE_BULK": return { ...state, transactions: state.transactions.map(t => action.ids.has(t.id) ? { ...t, category: action.category } : t) };
     case "RECATEGORIZE": return {
       ...state,
       transactions: state.transactions.map(t =>
@@ -780,7 +782,7 @@ function Dashboard({ state }) {
 
 // ─── Merchant View ────────────────────────────────────────────────────────────
 
-function MerchantView({ transactions, dispatch }) {
+function MerchantView({ transactions, dispatch, smartDelete }) {
   const [expanded, setExpanded] = useState(null);
   const [editingTx, setEditingTx] = useState(null); // { id, category }
 
@@ -874,7 +876,7 @@ function MerchantView({ transactions, dispatch }) {
                             >
                               {txCat.emoji} {txCat.label} ✎
                             </button>
-                            <button onClick={() => dispatch({ type: "DELETE_TX", id: tx.id })} style={{ background: "none", border: "none", color: "#27272a", cursor: "pointer", fontSize: "14px", padding: "0 4px" }}>×</button>
+                            <button onClick={() => smartDelete(tx.id)} style={{ background: "none", border: "none", color: "#27272a", cursor: "pointer", fontSize: "14px", padding: "0 4px" }}>×</button>
                           </div>
                         </div>
                       </div>
@@ -905,7 +907,7 @@ function MerchantView({ transactions, dispatch }) {
 
 // ─── Money View ───────────────────────────────────────────────────────────────
 
-function MoneyView({ state, dispatch }) {
+function MoneyView({ state, dispatch, smartDelete }) {
   const [sub, setSub] = useState("list");
   const [bankGuide, setBankGuide] = useState(null);
   const [filter, setFilter] = useState("all");
@@ -1060,7 +1062,7 @@ function MoneyView({ state, dispatch }) {
                   <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: "14px", color: tx.isIncome ? "#00c896" : "#fafafa" }}>
                     {tx.isIncome ? "+" : "-"}{fmt(tx.amount)}
                   </div>
-                  <button onClick={() => dispatch({ type: "DELETE_TX", id: tx.id })} style={{ background: "none", border: "none", color: "#27272a", cursor: "pointer", fontSize: "16px", padding: "4px", lineHeight: 1 }}>×</button>
+                  <button onClick={() => smartDelete(tx.id)} style={{ background: "none", border: "none", color: "#27272a", cursor: "pointer", fontSize: "16px", padding: "4px", lineHeight: 1 }}>×</button>
                 </div>
               </div>
             );
@@ -1069,7 +1071,7 @@ function MoneyView({ state, dispatch }) {
       )}
 
       {sub === "merchants" && (
-        <MerchantView transactions={state.transactions} dispatch={dispatch} />
+        <MerchantView transactions={state.transactions} dispatch={dispatch} smartDelete={smartDelete} />
       )}
 
       {sub === "add" && (
@@ -1426,6 +1428,91 @@ function AIChat({ state, dispatch }) {
 
 // ─── Finance Root ─────────────────────────────────────────────────────────────
 
+// ─── Smart Delete Prompt ──────────────────────────────────────────────────────
+
+function SimilarTxPrompt({ prompt, dispatch, onClose }) {
+  const [mode, setMode] = useState(null); // null | "recategorize"
+  const { merchant, txs, deletedCategory } = prompt;
+  const ids = new Set(txs.map(t => t.id));
+  const cat = CATEGORIES.find(c => c.id === deletedCategory) || CATEGORIES.at(-1);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 300, display: "flex", alignItems: "flex-end", padding: "16px" }}>
+      <div style={{ background: "#0f0f0f", border: "1px solid #1a1a1a", borderRadius: "20px", padding: "24px", width: "100%", animation: "slideUp 0.32s cubic-bezier(.16,1,.3,1)" }}>
+        <div style={{ width: "36px", height: "4px", background: "#3f3f46", borderRadius: "2px", margin: "0 auto 20px" }} />
+
+        <div style={{ fontSize: "10px", letterSpacing: "3px", color: "#ff8c00", marginBottom: "8px" }}>PATTERN DETECTED</div>
+        <div style={{ fontFamily: "'Bebas Neue'", fontSize: "26px", color: "#fafafa", letterSpacing: "0.5px", lineHeight: 1.2, marginBottom: "6px" }}>
+          {txs.length} more {merchant} transaction{txs.length !== 1 ? "s" : ""} found
+        </div>
+        <div style={{ fontSize: "13px", color: "#52525b", marginBottom: "22px", lineHeight: 1.5 }}>
+          You've deleted {cat.emoji} {cat.label} transactions from this merchant multiple times.
+          Want to handle the rest at once?
+        </div>
+
+        {/* Preview of similar txs */}
+        <div style={{ background: "#0a0a0a", borderRadius: "12px", padding: "12px", marginBottom: "20px", maxHeight: "140px", overflowY: "auto" }}>
+          {txs.slice(0, 6).map(tx => (
+            <div key={tx.id} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid #141414", fontSize: "12px" }}>
+              <span style={{ color: "#71717a" }}>{tx.date}</span>
+              <span style={{ color: "#a1a1aa", flex: 1, margin: "0 10px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{tx.description}</span>
+              <span style={{ fontFamily: "'IBM Plex Mono'", color: "#fafafa" }}>{fmt(tx.amount)}</span>
+            </div>
+          ))}
+          {txs.length > 6 && (
+            <div style={{ fontSize: "11px", color: "#3f3f46", textAlign: "center", paddingTop: "6px" }}>
+              +{txs.length - 6} more
+            </div>
+          )}
+        </div>
+
+        {mode === "recategorize" ? (
+          <>
+            <div style={{ fontSize: "10px", letterSpacing: "2px", color: "#3f3f46", marginBottom: "12px" }}>MOVE ALL TO</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "7px", marginBottom: "16px" }}>
+              {CATEGORIES.filter(c => c.id !== "income").map(c => (
+                <button
+                  key={c.id}
+                  onClick={() => { dispatch({ type: "RECATEGORIZE_BULK", ids, category: c.id }); onClose(); }}
+                  style={{ padding: "10px 6px", background: "#141414", border: "1px solid #1a1a1a", borderRadius: "9px", color: "#a1a1aa", fontSize: "11px", cursor: "pointer", textAlign: "center", lineHeight: 1.4 }}
+                >
+                  {c.emoji}<br />{c.label}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setMode(null)} style={{ width: "100%", padding: "13px", background: "none", border: "1px solid #1a1a1a", borderRadius: "12px", color: "#52525b", fontSize: "13px", cursor: "pointer" }}>
+              ← Back
+            </button>
+          </>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            <button
+              onClick={() => { dispatch({ type: "DELETE_BULK", ids }); onClose(); }}
+              style={{ width: "100%", padding: "15px", background: "#1a0505", border: "1px solid #ff3b3b30", borderRadius: "12px", color: "#ff3b3b", fontSize: "14px", fontWeight: 700, cursor: "pointer" }}
+            >
+              Delete all {txs.length}
+            </button>
+            <button
+              onClick={() => setMode("recategorize")}
+              style={{ width: "100%", padding: "15px", background: "#0f0f0f", border: "1px solid #1a1a1a", borderRadius: "12px", color: "#fafafa", fontSize: "14px", cursor: "pointer" }}
+            >
+              Move to a different category →
+            </button>
+            <button
+              onClick={onClose}
+              style={{ width: "100%", padding: "13px", background: "none", border: "none", color: "#3f3f46", fontSize: "13px", cursor: "pointer" }}
+            >
+              Keep them as-is
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Finance Root ─────────────────────────────────────────────────────────────
+
 const TABS = [
   { id: "dash",   label: "DASH",   icon: "◉" },
   { id: "money",  label: "MONEY",  icon: "$" },
@@ -1437,6 +1524,8 @@ export default function Finance() {
   const [state, dispatch] = useReducer(reducer, DEFAULT_STATE);
   const [tab, setTab] = useState("dash");
   const [hydrated, setHydrated] = useState(false);
+  const [similarPrompt, setSimilarPrompt] = useState(null);
+  const deletionTracker = useRef({});
 
   useEffect(() => {
     try {
@@ -1451,6 +1540,26 @@ export default function Finance() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
   }, [state, hydrated]);
 
+  // Deletes a single transaction, then checks if the user has now deleted 2+
+  // from the same merchant — if so, surface remaining similar transactions.
+  const smartDelete = useCallback((txId) => {
+    const tx = state.transactions.find(t => t.id === txId);
+    if (!tx) return;
+    dispatch({ type: "DELETE_TX", id: txId });
+
+    if (tx.isIncome) return; // don't prompt for income deletions
+    const key = merchantName(tx.description);
+    const count = (deletionTracker.current[key] || 0) + 1;
+    deletionTracker.current[key] = count;
+
+    if (count >= 2) {
+      const remaining = state.transactions.filter(t => t.id !== txId && merchantName(t.description) === key);
+      if (remaining.length > 0) {
+        setSimilarPrompt({ merchant: key, txs: remaining, deletedCategory: tx.category });
+      }
+    }
+  }, [state.transactions]);
+
   if (!hydrated) return null;
 
   if (!state.setup) {
@@ -1460,9 +1569,17 @@ export default function Finance() {
   return (
     <div style={{ position: "relative", minHeight: "100vh" }}>
       {tab === "dash" && <Dashboard state={state} />}
-      {tab === "money" && <MoneyView state={state} dispatch={dispatch} />}
+      {tab === "money" && <MoneyView state={state} dispatch={dispatch} smartDelete={smartDelete} />}
       {tab === "payoff" && <PayoffView state={state} />}
       {tab === "ai" && <AIChat state={state} dispatch={dispatch} />}
+
+      {similarPrompt && (
+        <SimilarTxPrompt
+          prompt={similarPrompt}
+          dispatch={dispatch}
+          onClose={() => setSimilarPrompt(null)}
+        />
+      )}
 
       <nav style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: "420px", background: "rgba(7,7,7,0.96)", backdropFilter: "blur(12px)", borderTop: "1px solid #0f0f0f", display: "flex", zIndex: 50 }}>
         {TABS.map(t => (
