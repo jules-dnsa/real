@@ -200,50 +200,94 @@ function parseCSVLine(line) {
   return cells;
 }
 
+// Handles ISO (YYYY-MM-DD), MM/DD/YYYY, M/D/YY, MM-DD-YYYY
+function parseDate(raw) {
+  if (!raw) return null;
+  const s = raw.trim();
+
+  // Already ISO — parse as local date to avoid UTC offset shifting the day
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+
+  // MM/DD/YYYY or M/D/YY
+  const slashMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (slashMatch) {
+    let [, m, d, y] = slashMatch.map(Number);
+    if (y < 100) y += 2000;
+    return new Date(y, m - 1, d);
+  }
+
+  // MM-DD-YYYY
+  const dashMatch = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (dashMatch) {
+    const [, m, d, y] = dashMatch.map(Number);
+    return new Date(y, m - 1, d);
+  }
+
+  // Fallback — let the engine try
+  const fallback = new Date(s);
+  return isNaN(fallback.getTime()) ? null : fallback;
+}
+
+function isHeaderRow(normalized) {
+  // A real header row contains "date" or "amount" as a key name
+  return normalized.some(h => h === "date" || h === "amount" || h === "transactiondate" || h === "posteddate");
+}
+
 function csvToTransactions(text) {
-  const lines = text.trim().split(/\r?\n/).filter(l => l.trim());
+  const allLines = text.trim().split(/\r?\n/).filter(l => l.trim());
+  if (allLines.length < 2) return [];
+
+  // Some banks (BoA, Citi) prepend account summary lines before the real headers.
+  // Scan up to the first 15 lines to find the actual header row.
+  let headerIdx = 0;
+  for (let i = 0; i < Math.min(15, allLines.length - 1); i++) {
+    const norm = parseCSVLine(allLines[i]).map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ""));
+    if (isHeaderRow(norm)) { headerIdx = i; break; }
+  }
+
+  const lines = allLines.slice(headerIdx);
   if (lines.length < 2) return [];
 
-  const rawHeaders = parseCSVLine(lines[0]);
-  const headers = rawHeaders.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ""));
-
-  const rows = lines.slice(1).map(l => {
-    const vals = parseCSVLine(l);
-    return Object.fromEntries(headers.map((h, i) => [h, vals[i] || ""]));
-  });
+  const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ""));
 
   const txs = [];
-  for (const row of rows) {
+  for (let i = 1; i < lines.length; i++) {
+    const vals = parseCSVLine(lines[i]);
+    const row = Object.fromEntries(headers.map((h, j) => [h, vals[j] || ""]));
     const keys = Object.keys(row);
 
     // Date
     const dateKey = keys.find(k =>
       k === "date" || k === "transactiondate" || k === "posteddate" || k.startsWith("date")
     );
-    const rawDate = row[dateKey] || "";
-    const d = new Date(rawDate);
-    if (!rawDate || isNaN(d.getTime())) continue;
-    const date = d.toISOString().split("T")[0];
+    const parsedDate = parseDate(row[dateKey] || "");
+    if (!parsedDate) continue;
+    const date = `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, "0")}-${String(parsedDate.getDate()).padStart(2, "0")}`;
 
-    // Description
+    // Description — BoA uses "description", Chase uses "description", WF uses column index
     const descKey = keys.find(k =>
-      ["description", "descr", "name", "merchant", "memo", "payee", "details", "transaction"].some(p => k.includes(p))
+      ["description", "descr", "name", "merchant", "memo", "payee", "details"].some(p => k.includes(p))
     );
     const description = (row[descKey] || row[keys[1]] || "Unknown").replace(/\s+/g, " ").trim().slice(0, 100);
 
-    // Amount — handles separate debit/credit columns or single signed amount
+    // Amount — handles debit/credit split columns OR single signed amount column
     let amount = 0, isIncome = false;
-    const debitKey = keys.find(k => k === "debit" || k.includes("withdrawal") || k === "debitamount");
-    const creditKey = keys.find(k => k === "credit" || k.includes("deposit") || k === "creditamount");
-    const amtKey = keys.find(k => k === "amount" || k === "amt" || k === "transactionamount");
+    const debitKey  = keys.find(k => k === "debit"  || k.includes("withdrawal") || k === "debitamount");
+    const creditKey = keys.find(k => k === "credit" || k.includes("deposit")    || k === "creditamount");
+    const amtKey    = keys.find(k => k === "amount" || k === "amt" || k === "transactionamount");
+
+    const clean = v => parseFloat((v || "").replace(/[$, ]/g, "").replace(/[()]/g, "-")) || 0;
 
     if (debitKey && creditKey) {
-      const cr = parseFloat((row[creditKey] || "").replace(/[$, ()]/g, "")) || 0;
-      const dr = parseFloat((row[debitKey] || "").replace(/[$, ()]/g, "")) || 0;
+      const cr = clean(row[creditKey]);
+      const dr = clean(row[debitKey]);
       if (cr > 0) { amount = cr; isIncome = true; }
       else if (dr > 0) { amount = dr; isIncome = false; }
     } else if (amtKey) {
-      const raw = parseFloat((row[amtKey] || "").replace(/[$, ]/g, "")) || 0;
+      const raw = clean(row[amtKey]);
       isIncome = raw > 0;
       amount = Math.abs(raw);
     }
