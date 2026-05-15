@@ -348,6 +348,19 @@ function ordinal(n) {
   return `${n}th`;
 }
 
+// Collapse "MCDONALD'S #1234 HOUSTON TX" → "MCDONALD'S"
+function merchantName(description) {
+  return description
+    .replace(/\s+#\d+.*/i, "")
+    .replace(/\s+\d{5,}.*/g, "")
+    .replace(/\s+(TX|CA|NY|FL|GA|NC|VA|OH|MI|PA|NJ|MA|WA|OR|CO|AZ|IL|MN|WI|MO|TN|IN|KY|SC|OK|AL|UT|NV|NM|KS|AR|MS|IA|NE|ID|HI|NH|ME|RI|MT|DE|SD|ND|VT|WY|DC|AK)\b.*/i, "")
+    .replace(/\s+\*+\d+.*/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase()
+    .slice(0, 32);
+}
+
 // ─── State ────────────────────────────────────────────────────────────────────
 
 const DEFAULT_STATE = {
@@ -365,6 +378,12 @@ function reducer(state, action) {
     case "ADD_TX": return { ...state, transactions: [action.tx, ...state.transactions] };
     case "ADD_BULK_TX": return { ...state, transactions: [...action.txs, ...state.transactions] };
     case "DELETE_TX": return { ...state, transactions: state.transactions.filter(t => t.id !== action.id) };
+    case "RECATEGORIZE": return {
+      ...state,
+      transactions: state.transactions.map(t =>
+        action.map[t.description] && !t.isIncome ? { ...t, category: action.map[t.description] } : t
+      ),
+    };
     case "ADD_CHAT": return { ...state, chatMessages: [...state.chatMessages, action.msg] };
     case "RESET": return DEFAULT_STATE;
     default: return state;
@@ -723,6 +742,131 @@ function Dashboard({ state }) {
   );
 }
 
+// ─── Merchant View ────────────────────────────────────────────────────────────
+
+function MerchantView({ transactions, dispatch }) {
+  const [expanded, setExpanded] = useState(null);
+  const [editingTx, setEditingTx] = useState(null); // { id, category }
+
+  const expense = transactions.filter(t => !t.isIncome);
+
+  // Group by normalized merchant name
+  const groupMap = {};
+  for (const tx of expense) {
+    const key = merchantName(tx.description);
+    if (!groupMap[key]) groupMap[key] = { name: key, total: 0, txs: [], category: tx.category };
+    groupMap[key].total += tx.amount;
+    groupMap[key].txs.push(tx);
+    // Use most common category in the group
+    const counts = {};
+    groupMap[key].txs.forEach(t => { counts[t.category] = (counts[t.category] || 0) + 1; });
+    groupMap[key].category = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+  }
+
+  const groups = Object.values(groupMap).sort((a, b) => b.total - a.total);
+
+  const saveCategory = (txId, newCat) => {
+    dispatch({ type: "RECATEGORIZE", map: Object.fromEntries(
+      transactions.filter(t => t.id === txId).map(t => [t.description, newCat])
+    )});
+    setEditingTx(null);
+  };
+
+  if (!groups.length) {
+    return (
+      <div style={{ padding: "48px 24px", textAlign: "center", color: "#27272a", fontSize: "13px" }}>
+        No transactions yet — upload a CSV or add one manually
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "16px 20px 100px" }}>
+      <div style={{ fontSize: "10px", letterSpacing: "3px", color: "#27272a", marginBottom: "16px" }}>
+        {groups.length} MERCHANTS
+      </div>
+      {groups.map(g => {
+        const cat = CATEGORIES.find(c => c.id === g.category) || CATEGORIES.at(-1);
+        const isOpen = expanded === g.name;
+        const sorted = [...g.txs].sort((a, b) => b.date.localeCompare(a.date));
+        return (
+          <div key={g.name} style={{ marginBottom: "8px", background: "#0f0f0f", borderRadius: "12px", overflow: "hidden" }}>
+            {/* Merchant header row */}
+            <div
+              onClick={() => setExpanded(isOpen ? null : g.name)}
+              style={{ display: "flex", alignItems: "center", gap: "12px", padding: "13px 14px", cursor: "pointer" }}
+            >
+              <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px", flexShrink: 0 }}>
+                {cat.emoji}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: "13px", color: "#fafafa", fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {g.name}
+                </div>
+                <div style={{ fontSize: "11px", color: "#3f3f46", marginTop: "2px" }}>
+                  <span style={{ color: cat.color }}>{cat.label}</span>
+                  {" · "}{g.txs.length} transaction{g.txs.length !== 1 ? "s" : ""}
+                </div>
+              </div>
+              <div style={{ textAlign: "right", flexShrink: 0 }}>
+                <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: "15px", color: "#fafafa" }}>{fmt(g.total)}</div>
+                <div style={{ fontSize: "10px", color: "#3f3f46", marginTop: "2px" }}>
+                  avg {fmt(g.total / g.txs.length)}
+                </div>
+              </div>
+              <div style={{ color: "#27272a", fontSize: "12px", marginLeft: "4px" }}>{isOpen ? "▲" : "▼"}</div>
+            </div>
+
+            {/* Expanded transactions */}
+            {isOpen && (
+              <div style={{ borderTop: "1px solid #141414" }}>
+                {sorted.map((tx, i) => {
+                  const txCat = CATEGORIES.find(c => c.id === tx.category) || CATEGORIES.at(-1);
+                  const isEditing = editingTx === tx.id;
+                  return (
+                    <div key={tx.id}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px", borderBottom: i < sorted.length - 1 ? "1px solid #0a0a0a" : "none" }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontSize: "12px", color: "#71717a" }}>{tx.date}</span>
+                            <span style={{ fontFamily: "'IBM Plex Mono'", fontSize: "13px", color: "#fafafa" }}>-{fmt(tx.amount)}</span>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px" }}>
+                            <button
+                              onClick={() => setEditingTx(isEditing ? null : tx.id)}
+                              style={{ display: "flex", alignItems: "center", gap: "4px", background: "#141414", border: "none", borderRadius: "6px", padding: "3px 8px", cursor: "pointer", color: txCat.color, fontSize: "11px" }}
+                            >
+                              {txCat.emoji} {txCat.label} ✎
+                            </button>
+                            <button onClick={() => dispatch({ type: "DELETE_TX", id: tx.id })} style={{ background: "none", border: "none", color: "#27272a", cursor: "pointer", fontSize: "14px", padding: "0 4px" }}>×</button>
+                          </div>
+                        </div>
+                      </div>
+                      {isEditing && (
+                        <div style={{ padding: "8px 14px 12px", background: "#0a0a0a", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "6px" }}>
+                          {CATEGORIES.filter(c => c.id !== "income").map(c => (
+                            <button
+                              key={c.id}
+                              onClick={() => saveCategory(tx.id, c.id)}
+                              style={{ padding: "8px 6px", background: tx.category === c.id ? "#141414" : "transparent", border: `1px solid ${tx.category === c.id ? c.color + "50" : "#141414"}`, borderRadius: "8px", color: tx.category === c.id ? c.color : "#52525b", fontSize: "11px", cursor: "pointer", textAlign: "center" }}
+                            >
+                              {c.emoji}<br />{c.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Money View ───────────────────────────────────────────────────────────────
 
 function MoneyView({ state, dispatch }) {
@@ -768,12 +912,38 @@ function MoneyView({ state, dispatch }) {
       const txs = csvToTransactions(text);
       if (!txs.length) {
         setUploadMsg({ type: "error", text: "Couldn't read transactions from this file. Try the bank guide to make sure you're exporting CSV correctly." });
+        e.target.value = "";
         return;
       }
       const existingKeys = new Set(state.transactions.map(t => `${t.date}|${t.description}|${t.amount}`));
       const fresh = txs.filter(t => !existingKeys.has(`${t.date}|${t.description}|${t.amount}`));
+      const skipped = txs.length - fresh.length;
+
       dispatch({ type: "ADD_BULK_TX", txs: fresh });
-      setUploadMsg({ type: "success", text: `Imported ${fresh.length} transactions. ${txs.length - fresh.length} duplicates skipped.` });
+      setUploadMsg({ type: "info", text: `Imported ${fresh.length} transactions. Categorizing with AI…` });
+
+      // AI categorization — send unique descriptions, apply returned map
+      try {
+        const unique = [...new Set(fresh.filter(t => !t.isIncome).map(t => t.description))];
+        if (unique.length) {
+          const res = await fetch("/api/categorize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ descriptions: unique }),
+          });
+          if (res.ok) {
+            const { categories } = await res.json();
+            if (categories && Object.keys(categories).length > 0) {
+              dispatch({ type: "RECATEGORIZE", map: categories });
+            }
+          }
+        }
+      } catch { /* AI unavailable — keyword categories stay */ }
+
+      setUploadMsg({
+        type: "success",
+        text: `Imported ${fresh.length} transactions${skipped ? ` · ${skipped} duplicates skipped` : ""}. Categories set by AI.`,
+      });
     } catch {
       setUploadMsg({ type: "error", text: "Error reading the file. Make sure it's a CSV, not a PDF." });
     }
@@ -796,7 +966,7 @@ function MoneyView({ state, dispatch }) {
     <div style={{ padding: "0 0 100px" }}>
       {/* Sub nav */}
       <div style={{ display: "flex", borderBottom: "1px solid #0f0f0f" }}>
-        {[{ id: "list", label: "Transactions" }, { id: "add", label: "+ Add" }, { id: "upload", label: "Upload CSV" }].map(t => (
+        {[{ id: "list", label: "All" }, { id: "merchants", label: "Merchants" }, { id: "add", label: "+ Add" }, { id: "upload", label: "Upload" }].map(t => (
           <button key={t.id} onClick={() => setSub(t.id)} style={{ flex: 1, padding: "14px 4px", background: "none", border: "none", borderBottom: `2px solid ${sub === t.id ? "#00c896" : "transparent"}`, color: sub === t.id ? "#00c896" : "#3f3f46", fontSize: "11px", letterSpacing: "1.5px", cursor: "pointer", transition: "color 0.2s" }}>
             {t.label.toUpperCase()}
           </button>
@@ -860,6 +1030,10 @@ function MoneyView({ state, dispatch }) {
             );
           })}
         </div>
+      )}
+
+      {sub === "merchants" && (
+        <MerchantView transactions={state.transactions} dispatch={dispatch} />
       )}
 
       {sub === "add" && (
