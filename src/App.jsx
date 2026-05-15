@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import Finance from "./Finance.jsx";
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 const HOUR_MS = 3_600_000;
@@ -106,8 +107,29 @@ function playSound(type) {
   } catch (e) { /* ignore */ }
 }
 
-// ─── Component ─────────────────────────────────────────────────────────────
+// ─── Root Router ──────────────────────────────────────────────────────────────
 export default function App() {
+  const [view, setView] = useState("finance");
+
+  if (view === "finance") {
+    return (
+      <div style={{ fontFamily: "'IBM Plex Sans',sans-serif", background: "#070707", minHeight: "100vh", color: "#fafafa", maxWidth: "420px", margin: "0 auto", position: "relative", overflowX: "hidden" }}>
+        <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.35}} *{box-sizing:border-box} input,textarea,button{font-family:'IBM Plex Sans',sans-serif} ::-webkit-scrollbar{display:none} input[type="number"]::-webkit-inner-spin-button,input[type="number"]::-webkit-outer-spin-button{-webkit-appearance:none} input::placeholder,textarea::placeholder{color:#3f3f46}`}</style>
+        <div style={{ position: "fixed", top: "12px", right: "16px", zIndex: 100 }}>
+          <button onClick={() => setView("push")} style={{ padding: "6px 12px", background: "#0f0f0f", border: "1px solid #1a1a1a", borderRadius: "20px", color: "#52525b", fontSize: "10px", letterSpacing: "2px", cursor: "pointer" }}>
+            PUSH
+          </button>
+        </div>
+        <Finance />
+      </div>
+    );
+  }
+
+  return <PushApp onBack={() => setView("finance")} />;
+}
+
+// ─── Push Component ───────────────────────────────────────────────────────────
+function PushApp({ onBack }) {
   const [tasks, setTasks] = useState(INITIAL_TASKS);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -462,7 +484,12 @@ export default function App() {
       <div style={{ padding: "24px 20px 16px", position: "sticky", top: 0, background: "#07070799", backdropFilter: "blur(12px)", zIndex: 10, borderBottom: "1px solid #0f0f0f" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "14px" }}>
           <div>
-            <div style={{ fontFamily: "'Bebas Neue'", fontSize: "46px", letterSpacing: "4px", color: "#ff8c00", lineHeight: 1 }}>PUSH</div>
+            <div>
+              <button onClick={onBack} style={{ background: "none", border: "none", color: "#3f3f46", fontSize: "10px", letterSpacing: "2px", cursor: "pointer", padding: "0 0 4px", display: "flex", alignItems: "center", gap: "4px" }}>
+                ← FINANCE
+              </button>
+              <div style={{ fontFamily: "'Bebas Neue'", fontSize: "46px", letterSpacing: "4px", color: "#ff8c00", lineHeight: 1 }}>PUSH</div>
+            </div>
             <div style={{ fontSize: "12px", color: "#52525b", marginTop: "2px" }}>
               {active.length > 0 ? `${active.length} task${active.length !== 1 ? "s" : ""} waiting on you` : "All clear. Add something."}
             </div>
